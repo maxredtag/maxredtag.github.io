@@ -20,7 +20,7 @@
             font-size: 16px;
             z-index: 100;
         }
-        #instructions {
+        #instructions, #error {
             position: fixed;
             top: 20px;
             left: 50%;
@@ -32,13 +32,18 @@
             text-align: center;
             z-index: 100;
         }
+        #error {
+            background: rgba(255, 0, 0, 0.7);
+            display: none;
+        }
     </style>
 </head>
 <body>
     <div id="instructions">Point your camera at a surface and tap to place texture</div>
+    <div id="error"></div>
     <button id="startAR">Start AR</button>
     <script type="module">
-        import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
+        import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r132/three.module.js';
 
         let container;
         let camera, scene, renderer;
@@ -48,7 +53,6 @@
         let hitTestSourceRequested = false;
         let textureGroup;
 
-        // Sample texture - replace with your desired texture
         const textureLoader = new THREE.TextureLoader();
         const floorTexture = textureLoader.load('https://threejsfundamentals.org/threejs/resources/images/checker.png');
         floorTexture.wrapS = THREE.RepeatWrapping;
@@ -58,62 +62,81 @@
         init();
 
         async function init() {
-            container = document.createElement('div');
-            document.body.appendChild(container);
+            try {
+                container = document.createElement('div');
+                document.body.appendChild(container);
 
-            scene = new THREE.Scene();
+                scene = new THREE.Scene();
 
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+                camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            container.appendChild(renderer.domElement);
+                renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.xr.enabled = true;
+                container.appendChild(renderer.domElement);
 
-            // Light setup
-            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-            light.position.set(0.5, 1, 0.25);
-            scene.add(light);
+                const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+                light.position.set(0.5, 1, 0.25);
+                scene.add(light);
 
-            // Create reticle
-            reticle = new THREE.Mesh(
-                new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-                new THREE.MeshBasicMaterial()
-            );
-            reticle.matrixAutoUpdate = false;
-            reticle.visible = false;
-            scene.add(reticle);
+                reticle = new THREE.Mesh(
+                    new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+                    new THREE.MeshBasicMaterial()
+                );
+                reticle.matrixAutoUpdate = false;
+                reticle.visible = false;
+                scene.add(reticle);
 
-            // Initialize texture group to hold placed textures
-            textureGroup = new THREE.Group();
-            scene.add(textureGroup);
+                textureGroup = new THREE.Group();
+                scene.add(textureGroup);
 
-            // Controller setup
-            controller = renderer.xr.getController(0);
-            controller.addEventListener('select', onSelect);
-            scene.add(controller);
+                controller = renderer.xr.getController(0);
+                controller.addEventListener('select', onSelect);
+                scene.add(controller);
 
-            // AR button
-            document.getElementById('startAR').addEventListener('click', () => {
-                const sessionInit = {
-                    requiredFeatures: ['hit-test'],
-                    optionalFeatures: ['dom-overlay'],
-                    domOverlay: { root: document.body }
-                };
-                navigator.xr.requestSession('immersive-ar', sessionInit)
-                    .then((session) => {
-                        renderer.xr.setSession(session);
-                        document.getElementById('startAR').style.display = 'none';
+                const startARButton = document.getElementById('startAR');
+                
+                if ('xr' in navigator) {
+                    navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+                        if (supported) {
+                            startARButton.addEventListener('click', onStartAR);
+                            startARButton.textContent = 'Start AR';
+                            startARButton.disabled = false;
+                        } else {
+                            showError('WebXR AR not supported on this device');
+                        }
                     });
-            });
+                } else {
+                    showError('WebXR not supported in this browser');
+                }
 
-            renderer.setAnimationLoop(render);
+                renderer.setAnimationLoop(render);
+            } catch (error) {
+                showError(`Initialization error: ${error.message}`);
+            }
+        }
+
+        function onStartAR() {
+            const sessionInit = {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.body }
+            };
+            navigator.xr.requestSession('immersive-ar', sessionInit)
+                .then(onSessionStarted)
+                .catch((error) => {
+                    showError(`Failed to start AR session: ${error.message}`);
+                });
+        }
+
+        function onSessionStarted(session) {
+            renderer.xr.setSession(session);
+            document.getElementById('startAR').style.display = 'none';
         }
 
         function onSelect() {
             if (reticle.visible) {
-                // Create a plane with the texture
                 const geometry = new THREE.PlaneGeometry(1, 1);
                 const material = new THREE.MeshBasicMaterial({
                     map: floorTexture,
@@ -121,7 +144,6 @@
                 });
                 const plane = new THREE.Mesh(geometry, material);
 
-                // Copy reticle's position and rotation
                 plane.position.setFromMatrixPosition(reticle.matrix);
                 plane.quaternion.setFromRotationMatrix(reticle.matrix);
 
@@ -157,6 +179,13 @@
             }
 
             renderer.render(scene, camera);
+        }
+
+        function showError(message) {
+            const errorElement = document.getElementById('error');
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+            document.getElementById('startAR').style.display = 'none';
         }
 
         window.addEventListener('resize', onWindowResize, false);
